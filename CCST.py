@@ -264,7 +264,7 @@ def format_new_sheet(ws):
 
     thin = Side(border_style="thin", color="000000")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=31):
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=42):
         for cell in row:
             cell.border = border
 
@@ -287,8 +287,8 @@ def product_sums(ws):
         return cell.value
 
     for row in range(2, ws.max_row + 1):
-        ws[f"AP{row}"] = f"=SUM(C{row}:AO{row})"
-        ws[f"AR{row}"] = f"=COUNTIF(C{row}:AO{row}, 0)"
+        ws[f"AQ{row}"] = f"=SUM(C{row}:AP{row})"
+        ws[f"AS{row}"] = f"=COUNTIF(C{row}:AP{row}, 0)"
 
     category_blocks = {}
     current_category = None
@@ -318,7 +318,7 @@ def product_sums(ws):
             total_rows.append(f"AF{row}")
 
         if total_rows:
-            ws[f"AQ{start_row}"] = f"=SUM({','.join(total_rows)})"
+            ws[f"AR{start_row}"] = f"=SUM({','.join(total_rows)})"
 
 def prepare_chart_data(wb):
     # Ensure Charts sheet exists in position 3
@@ -455,14 +455,13 @@ def run_stock_tracker(target_wb, sheet_name):
 
     row_num = 2
 
+    all_results = {}
+
     # Start scanning for URLs
     for category, products in [("Chassis", chassis),
                                ("Cooler", coolers),
                                ("External", external),
                                ("Power Supply", power_supplies)]:
-        
-        if row_num != 1:
-            row_num += 1
 
         for name, url in products.items():
             if not url and DEBUG_MODE:
@@ -474,13 +473,15 @@ def run_stock_tracker(target_wb, sheet_name):
                 row = [category, name] + ["N/A"] * len(store_map)
                 ws.append(row)
                 row_num += 1
+                continue
+
+            product_result = {"url": url, "stores": {}}
 
             print(f"\nChecking stock for: {name}")
 
             try:
                 driver.get(url)
                 time.sleep(2)
-                print("Check 1")
 
                 store_stock_map = {}
                 for store in store_map:
@@ -490,19 +491,46 @@ def run_stock_tracker(target_wb, sheet_name):
                             print(f"[DEBUG] Found store element for {store}: {store_element[0].get_attribute('outerHTML')}")
 
                             stock_element = store_element[0].find_element(By.XPATH, "following::span[contains(@class, 'shop-online-box')][1]")
+                            raw_html = stock_element.get_attribute("outerHTML")
+                            raw_text = stock_element.get_attribute("textContent").strip()
 
-                            print(f"[DEBUG] Found stock element for {store}: {stock_element.get_attribute('outerHTML')}")
+                            print(f"[DEBUG] Found stock element for {store}: {raw_html}")
+                            print(f"[DEBUG] Extracted stock text for {store}: '{raw_text}'")
 
-                            stock_value = stock_element.text.strip()
+                            if raw_text.endswith("+"):
+                                stock_value = raw_text
+                            else:
+                                try:
+                                    stock_value = int(raw_text)
+                                except ValueError:
+                                    stock_value = raw_text
+
                             store_stock_map[store] = stock_value
+                            product_result["stores"][store] = {
+                                "stock_html": raw_html,
+                                "stock_text": raw_text,
+                                "final_value": stock_value
+                            }
                         else:
                             print(f"[DEBUG] Store not found in page: {store}")
                             store_stock_map[store] = 0
+                            product_result["stores"][store] = {
+                                "stock_html": raw_html,
+                                "stock_text": raw_text,
+                                "final_value": stock_value
+                            }
                     except Exception:
                         print(f"[DEBUG] Error while scanning {store}: {e}")
                         store_stock_map[store] = "N/A"
+                        product_result["stores"][store] = {
+                                "stock_html": raw_html,
+                                "stock_text": raw_text,
+                                "final_value": stock_value
+                        }
                 
                 print(f"{name}: {store_stock_map}")
+
+                all_results[name] = product_result
 
                 row = [category, name] + [store_stock_map.get(store, "N/A") for store in store_map]
                 ws.append(row)
@@ -519,6 +547,12 @@ def run_stock_tracker(target_wb, sheet_name):
     product_sums(ws)
 
     driver.quit()
+
+    # save debug results to JSON
+    with open("canada_computers_debug.json", "w", encoding="utf-8") as f:
+        json.dump(all_results, f, indent=2, ensure_ascii=False)
+
+    print("[DEBUG] Saved raw scraping results to canada_computers_debug.json")
 
 def terminate():
     sys.exit()
