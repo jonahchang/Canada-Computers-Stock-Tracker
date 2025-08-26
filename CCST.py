@@ -120,9 +120,9 @@ def save_products(filename):
 
 # Mapping of store ID to store name (must match Excel header format)
 store_map = [
-    "Surrey", "Richmond", "Burnaby", "Coquitlam", "Vancouver", "Broadway", "London Masonville", "Waterloo", "Cambridge", "Hamilton", 
+    "Surrey", "Richmond", "Burnaby", "Coquitlam", "Vancouver Broadway", "London Masonville", "Waterloo", "Cambridge", "Hamilton", 
     "Burlington", "Barrie", "Brampton", "Oakville",	"Mississauga", "Etobicoke", "Vaughan", "Newmarket", "Richmond Hill", "North York",
-    "Toronto Down Town 284", "Markham Unionville", "Toronto Kennedy", "St Catharines", "Ajax", "Whitby", "Orshawa", "Kingston", "Kanata",
+    "Toronto Down Town 284", "Markham Unionville", "Toronto Kennedy", "St Catharines", "Ajax", "Whitby", "Oshawa", "Kingston", "Kanata",
     "Ottawa Merivale", "Ottawa Downtown", "Ottawa Orleans", "Gatineau", "West Island", "Laval", "Marche Central", "Montreal", "Brossard",
     "QC Vanier", "Halifax"
 ]
@@ -210,7 +210,7 @@ def normalize_cell_value(value):
 def analyze_stock(wb):
     sheetnames = wb.sheetnames
     
-    for i in range(3, len(sheetnames)):
+    for i in range(2, len(sheetnames)):
         prev_sheet = wb[sheetnames[i - 1]]
         curr_sheet = wb[sheetnames[i]]
 
@@ -309,34 +309,34 @@ def product_sums(ws):
     if current_category is not None:
         category_blocks[current_category] = (current_start, ws.max_row + 1)
 
-    # 3. Write category totals in AG at the top row of each category
+    # 3. Write category totals in AS at the top row of each category
     for category, (start_row, end_row) in category_blocks.items():
         total_rows = []
         for row in range(start_row, end_row):
             if not get_merged_value(ws, f"A{row}"):  # Stop if blank
                 break
-            total_rows.append(f"AF{row}")
+            total_rows.append(f"AQ{row}")
 
         if total_rows:
             ws[f"AR{start_row}"] = f"=SUM({','.join(total_rows)})"
 
 def prepare_chart_data(wb):
     # Ensure Charts sheet exists in position 3
-    if len(wb.sheetnames) < 3:
-        while len(wb.sheetnames) < 3:
+    if len(wb.sheetnames) < 2:
+        while len(wb.sheetnames) < 2:
             wb.create_sheet()
-    if wb.sheetnames[2] != "Charts":
+    if wb.sheetnames[1] != "Charts":
         charts_ws = wb.create_sheet("Charts")
-        wb._sheets.insert(2, wb._sheets.pop())
+        wb._sheets.insert(1, wb._sheets.pop())
     else:
-        charts_ws = wb.worksheets[2]
+        charts_ws = wb.worksheets[1]
 
     # Clear existing content
     for row in charts_ws.iter_rows():
         for cell in row:
             cell.value = None
 
-    weekly_sheets = wb.sheetnames[3:]
+    weekly_sheets = wb.sheetnames[2:]
     all_categories = {}
     model_data = {}
     category_totals = {}
@@ -374,13 +374,12 @@ def prepare_chart_data(wb):
             if model not in all_categories[category]:
                 all_categories[category].append(model)
 
-            # Sum columns C–AE
+            # Sum columns D-AP
             total_value = 0
-            for col in range(3, 42):  # C=3, AO=30
+            for col in range(4, 42):
                 cell_val = ws.cell(row=row, column=col).value
                 if isinstance(cell_val, (int, float)):
                     total_value += cell_val
-                    col_letter = get_column_letter(col)
 
             # Store model data
             model_data.setdefault(category, {}).setdefault(model, []).append(total_value)
@@ -435,7 +434,7 @@ def prepare_chart_data(wb):
         for i, store in enumerate(store_map):
             store_total = 0
             for row in range(2, ws.max_row + 1):
-                val = ws.cell(row=row, column=3 + i).value
+                val = ws.cell(row=row, column=4 + i).value
                 if isinstance(val, (int, float)):
                     store_total += val
             charts_ws.cell(row=start_row + w + 1, column=i + 2).value = store_total
@@ -450,12 +449,12 @@ def run_stock_tracker(target_wb, sheet_name):
 
     # Setup worksheet
     ws = target_wb.create_sheet(title=sheet_name)
-    headers = ["Product Category", "Model"] + store_map + ["INDIVIDUAL TOTALS", "CATEGORY TOTALS", "OUT OF STOCK"]
+    headers = ["Product Category", "Model", "Online"] + store_map + ["INDIVIDUAL TOTALS", "CATEGORY TOTALS", "OUT OF STOCK"]
     ws.append(headers)
 
     row_num = 2
 
-    all_results = {}
+    debug_lines = []
 
     # Start scanning for URLs
     for category, products in [("Chassis", chassis),
@@ -470,69 +469,81 @@ def run_stock_tracker(target_wb, sheet_name):
 
             if url == 0:
                 print(f"Error fetching {name}: No webpage for this product.")
-                row = [category, name] + ["N/A"] * len(store_map)
+                row = [category, name, "N/A"] + ["N/A"] * len(store_map)
                 ws.append(row)
                 row_num += 1
                 continue
 
-            product_result = {"url": url, "stores": {}}
+            product_result = {"url": url, "online": None, "stores": {}}
 
-            print(f"\nChecking stock for: {name}")
+            header_line = f"\n=== Checking stock for: {name} ==="
+            print(header_line)
+            debug_lines.append(header_line)
 
             try:
                 driver.get(url)
                 time.sleep(2)
+
+                online_status = "N/A"
+                try:
+                    online_element = driver.find_elements(By.XPATH, "//p[contains(@class, 'mt-1 text-dark f-16 fm-xs-SF-Pro-Display-Medium')]")
+                    for element in online_element:
+                        text = element.get_attribute("textContent").strip()
+                        if "Available to Ship" in text:
+                            online_status = "Yes"
+                            break
+                        else:
+                            online_status = "No"
+                            break
+                except Exception as e:
+                    print(f"[DEBUG] Could not detect online availability: {e}")
+                    online_status = "N/A"
+
+                product_result["online"] = online_status
+
+                print(f"Online: {online_status}")
+                debug_lines.append(f"Online: {online_status}")
 
                 store_stock_map = {}
                 for store in store_map:
                     try:
                         store_element = driver.find_elements(By.XPATH, f"//span[contains(text(), '{store}')]")
                         if store_element:
-                            print(f"[DEBUG] Found store element for {store}: {store_element[0].get_attribute('outerHTML')}")
-
                             stock_element = store_element[0].find_element(By.XPATH, "following::span[contains(@class, 'shop-online-box')][1]")
                             raw_html = stock_element.get_attribute("outerHTML")
+                            classes = stock_element.get_attribute("class")
                             raw_text = stock_element.get_attribute("textContent").strip()
 
-                            print(f"[DEBUG] Found stock element for {store}: {raw_html}")
-                            print(f"[DEBUG] Extracted stock text for {store}: '{raw_text}'")
-
-                            if raw_text.endswith("+"):
-                                stock_value = raw_text
-                            else:
-                                try:
+                            if "bg-0000001" in classes:
+                                stock_value = 0
+                            elif "bg-E3E9F8" in classes:
+                                # Try to parse number
+                                if raw_text.isdigit():
                                     stock_value = int(raw_text)
-                                except ValueError:
-                                    stock_value = raw_text
+                                else:
+                                    stock_value = raw_text  # e.g. "10+"
+                            else:
+                                stock_value = raw_text
 
                             store_stock_map[store] = stock_value
-                            product_result["stores"][store] = {
-                                "stock_html": raw_html,
-                                "stock_text": raw_text,
-                                "final_value": stock_value
-                            }
+                            
+                            line = f"   → {store}: {raw_html} → {stock_value}"
+                            print(line)
+                            debug_lines.append(line)
                         else:
-                            print(f"[DEBUG] Store not found in page: {store}")
+                            msg = f"   → {store}: NOT FOUND"
+                            print(msg)
+                            debug_lines.append(msg)
                             store_stock_map[store] = 0
-                            product_result["stores"][store] = {
-                                "stock_html": raw_html,
-                                "stock_text": raw_text,
-                                "final_value": stock_value
-                            }
                     except Exception:
-                        print(f"[DEBUG] Error while scanning {store}: {e}")
+                        msg = f"   → {store}: ERROR ({e})"
+                        print(msg)
+                        debug_lines.append(msg)
                         store_stock_map[store] = "N/A"
-                        product_result["stores"][store] = {
-                                "stock_html": raw_html,
-                                "stock_text": raw_text,
-                                "final_value": stock_value
-                        }
                 
                 print(f"{name}: {store_stock_map}")
 
-                all_results[name] = product_result
-
-                row = [category, name] + [store_stock_map.get(store, "N/A") for store in store_map]
+                row = [category, name, online_status] + [store_stock_map.get(store, "N/A") for store in store_map]
                 ws.append(row)
                 row_num += 1
             
@@ -548,9 +559,9 @@ def run_stock_tracker(target_wb, sheet_name):
 
     driver.quit()
 
-    # save debug results to JSON
-    with open("canada_computers_debug.json", "w", encoding="utf-8") as f:
-        json.dump(all_results, f, indent=2, ensure_ascii=False)
+    # Save debug log to file
+    with open("canada_computers_debug.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(debug_lines))
 
     print("[DEBUG] Saved raw scraping results to canada_computers_debug.json")
 
@@ -767,12 +778,15 @@ def main():
     global STOCK_TRACKER_START
     STOCK_TRACKER_START = time.time()
 
+    analyze_only = messagebox.askyesno("ANALYZE ONLY", "Would you like to ONLY run the highlighting/labeling program?")
+
     if use_existing:
         # Run the stock tracker and coloring
         wb = load_workbook(file_path)
         sheet_name = f"WK{week_number}"
         process_add_products_sheet(wb)
-        run_stock_tracker(wb, sheet_name)
+        if not analyze_only:
+            run_stock_tracker(wb, sheet_name)
         prepare_chart_data(wb)
     else:
         # If the user opts to create an independent sheet with this week's stock
