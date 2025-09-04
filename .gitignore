@@ -1,1 +1,4 @@
 /canada_computers_debug.txt
+/build/
+/dist/
+*.spec
