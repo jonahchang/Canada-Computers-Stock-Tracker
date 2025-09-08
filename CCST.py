@@ -7,14 +7,11 @@ from tkinter import Tk, filedialog, simpledialog, messagebox
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 DEBUG_MODE = True
 
@@ -321,7 +318,7 @@ def product_sums(ws):
             ws[f"AR{start_row}"] = f"=SUM({','.join(total_rows)})"
 
 def prepare_chart_data(wb):
-    # Ensure Charts sheet exists in position 3
+    # Ensure Charts sheet exists in position 2
     if len(wb.sheetnames) < 2:
         while len(wb.sheetnames) < 2:
             wb.create_sheet()
@@ -374,9 +371,9 @@ def prepare_chart_data(wb):
             if model not in all_categories[category]:
                 all_categories[category].append(model)
 
-            # Sum columns D-AP
+            # Sum columns D–AP
             total_value = 0
-            for col in range(4, 42):
+            for col in range(4, 42):  # C=4, AP=42
                 cell_val = ws.cell(row=row, column=col).value
                 if isinstance(cell_val, (int, float)):
                     total_value += cell_val
@@ -390,54 +387,94 @@ def prepare_chart_data(wb):
 
     # Write product data per category
     current_row = 1
+
     for category, models in all_categories.items():
         charts_ws.cell(row=current_row, column=1).value = f"{category} Stock Trends Data"
         start_row = current_row + 1
-        charts_ws.cell(row=start_row, column=1).value = "Week"
+        charts_ws.cell(row=start_row, column=1).value = "Model"
 
         for i, week in enumerate(week_labels):
-            charts_ws.cell(row=start_row + i + 1, column=1).value = week
+            charts_ws.cell(row=start_row, column=i + 2).value = week
 
         for j, model in enumerate(models):
-            charts_ws.cell(row=start_row, column=j + 2).value = model
+            charts_ws.cell(row=start_row + j + 1, column=1).value = model
             model_values = model_data[category].get(model, [])
             for i, value in enumerate(model_values):
-                charts_ws.cell(row=start_row + i + 1, column=j + 2).value = value
+                charts_ws.cell(row=start_row + j + 1, column=i + 2).value = value
 
-        current_row = start_row + len(week_labels) + 3
+        # Create a table for this category
+        end_row = start_row + len(models)
+        end_col = 1 + len(week_labels)
+        ref = f"A{start_row}:{chr(64+end_col)}{end_row}"
+        add_or_update_table(charts_ws, f"{category.replace(' ', '')}Table", ref)
+
+        current_row = start_row + len(models) + 3
 
     # Write category totals
     charts_ws.cell(row=current_row, column=1).value = "Category Totals Data"
     start_row = current_row + 1
-    charts_ws.cell(row=start_row, column=1).value = "Week"
+    charts_ws.cell(row=start_row, column=1).value = "Category"
     # Preserve category order as first encountered
     ordered_categories = list(category_totals.keys())
-    for i, cat in enumerate(ordered_categories):
-        charts_ws.cell(row=start_row, column=i + 2).value = cat
+    for i, week in enumerate(week_labels):
+        charts_ws.cell(row=start_row, column=i + 2).value = week
 
-    for w, week in enumerate(week_labels):
-        charts_ws.cell(row=start_row + w + 1, column=1).value = week
-        for i, cat in enumerate(ordered_categories):
-            charts_ws.cell(row=start_row + w + 1, column=i + 2).value = category_totals[cat][w]
+    for w, cat in enumerate(ordered_categories):
+        charts_ws.cell(row=start_row + w + 1, column=1).value = cat
+        for i, week in enumerate(week_labels):
+            charts_ws.cell(row=start_row + w + 1, column=i + 2).value = category_totals[cat][i]
 
-    current_row = start_row + len(week_labels) + 3
+    end_row = start_row + len(ordered_categories)
+    end_col = 1 + len(week_labels)
+    ref = f"A{start_row}:{chr(64+end_col)}{end_row}"
+    add_or_update_table(charts_ws, "CategoryTotalsTable", ref)
+
+    current_row = start_row + len(ordered_categories) + 3
 
     # Write store totals
     charts_ws.cell(row=current_row, column=1).value = "Store Totals Data"
     start_row = current_row + 1
-    charts_ws.cell(row=start_row, column=1).value = "Week"
+    charts_ws.cell(row=start_row, column=1).value = "Store"
+    for j, week in enumerate(week_labels):
+        charts_ws.cell(row=start_row, column=j + 2).value = week
+
+    # Each store becomes a row
     for i, store in enumerate(store_map):
-        charts_ws.cell(row=start_row, column=i + 2).value = store
-    for w, sheetname in enumerate(weekly_sheets):
-        ws = wb[sheetname]
-        charts_ws.cell(row=start_row + w + 1, column=1).value = sheetname
-        for i, store in enumerate(store_map):
+        charts_ws.cell(row=start_row + i + 1, column=1).value = store
+        for j, sheetname in enumerate(weekly_sheets):
+            ws = wb[sheetname]
             store_total = 0
             for row in range(2, ws.max_row + 1):
-                val = ws.cell(row=row, column=4 + i).value
+                val = ws.cell(row=row, column=3 + i).value
                 if isinstance(val, (int, float)):
                     store_total += val
-            charts_ws.cell(row=start_row + w + 1, column=i + 2).value = store_total
+            charts_ws.cell(row=start_row + i + 1, column=j + 2).value = store_total
+
+    end_row = start_row + len(store_map)
+    end_col = 1 + len(week_labels)
+    ref = f"A{start_row}:{chr(64+end_col)}{end_row}"
+    add_or_update_table(charts_ws, "StoreTotalsTable", ref)
+
+def add_or_update_table(ws, table_name, ref):
+    """Add a table if it doesn't exist, or update ref if it does (handles dict vs list)."""
+
+    # Case 1: _tables is a dict {name: Table}
+    if isinstance(ws._tables, dict):
+        if table_name in ws._tables:
+            ws._tables[table_name].ref = ref
+            return
+    # Case 2: _tables is a list [Table, Table, ...]
+    else:
+        for t in ws._tables:
+            if getattr(t, "name", None) == table_name:
+                t.ref = ref
+                return
+
+    # If not found → create new table
+    tab = Table(displayName=table_name, ref=ref)
+    style = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True, showColumnStripes=False)
+    tab.tableStyleInfo = style
+    ws.add_table(tab)
 
 def run_stock_tracker(target_wb, sheet_name):
     # Setup Selenium driver
