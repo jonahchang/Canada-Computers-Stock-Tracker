@@ -13,6 +13,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Border, Side
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
+from openpyxl.utils import range_boundaries
 
 DEBUG_MODE = True
 
@@ -29,7 +30,7 @@ def load_products():
             power_supplies = data.get("power_supplies", {})
             coolers = data.get("coolers", {})
             chassis = data.get("chassis", {})
-            external = data.get("miscellaneous", {})
+            external = data.get("external", {})
     else:
         # Chassis
         chassis = {"GT301/BLK/ARGB FAN": "https://www.canadacomputers.com/en/mid-tower-cases/168147/asus-tuf-gaming-gt301-mid-tower-compact-case-for-atx-motherboards-gt301-blk-argb-fan.html",
@@ -95,8 +96,6 @@ def load_products():
                         "AP-750G": "https://www.canadacomputers.com/en/power-supplies/253022/asus-prime-750w-gold-power-supply-ap-750g.html",
                         "ROG-STRIX-1000G-AURA-GAMING": "https://www.canadacomputers.com/en/power-supplies/267287/asus-rog-strix-1000w-gold-aura-edition-fully-modular-power-supply-80-gold-certified-atx-3-0-rog-strix-1000g-aura-gaming.html",
                         "ROG-STRIX-850G-AURA-GAMING": "https://www.canadacomputers.com/en/power-supplies/266676/asus-rog-strix-850w-gold-aura-edition-fully-modular-power-supply-80-gold-certified-atx-3-0-rog-strix-850g-aura-gaming.html",
-                        
-                        # wrong SKU
                         "ROG-STRIX-750G-AURA-GAMING": "https://www.canadacomputers.com/en/power-supplies/253675/asus-rog-strix-750w-gold-aura-edition-fully-modular-power-supply-80-gold-certified-atx-3-0-90ye00p3-bvaa00.html?srsltid=AfmBOopk52uR4Lnwwl6fGTNT4XklYuUb5S8Ur5WjtiR7xq8JBEcd3Mlx",
                         "TUF-GAMING-1200G": "https://www.canadacomputers.com/en/power-supplies/265984/asus-tuf-gaming-1200w-gold-power-supply-tuf-gaming-1200g.html",
                         "ROG-STRIX-1200P-GAMING": "https://www.canadacomputers.com/en/power-supplies/268226/asus-rog-strix-1200w-platinum-fully-modular-power-supply-80-platinum-certified-atx-3-1-rog-strix-1200p-gaming.html",
@@ -244,22 +243,22 @@ def analyze_stock(wb):
 
 # Format the sheet
 def format_new_sheet(ws):
-    category_positions = {}
-    row_start = 2
-    for category, products in [("Chassis", chassis),
-                               ("AIO Liquid CPU Cooler", coolers),
-                               ("External", external),
-                               ("Power Supply", power_supplies)]:
-        if not products:
-            continue
-        row_end = row_start + len(products) - 1
-        ws.merge_cells(start_row=row_start, start_column=1, end_row = row_end, end_column=1)
-        ws[f"A{row_start}"] = category
-        category_positions[category] = row_start
-        for i, name in enumerate(products.keys(), start=row_start):
-            ws[f"B{i}"] = name
-        row_start = row_end + 1
+    # Merge category cells by detecting consecutive identical values in col A
+    current_category = None
+    start_row = None
 
+    for row in range(2, ws.max_row + 1):
+        category = ws[f"A{row}"].value
+        if category != current_category:
+            if current_category is not None and start_row is not None:
+                ws.merge_cells(start_row=start_row, start_column=1, end_row=row-1, end_column=1)
+            current_category = category
+            start_row = row
+    # Merge the last block
+    if current_category and start_row is not None:
+        ws.merge_cells(start_row=start_row, start_column=1, end_row=ws.max_row, end_column=1)
+
+    # Apply borders and auto-widths
     thin = Side(border_style="thin", color="000000")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=42):
@@ -267,14 +266,8 @@ def format_new_sheet(ws):
             cell.border = border
 
     for col in ws.columns:
-        max_length = 0
-        col_letter = col[0].column_letter
-        for cell in col:
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = max_length + 2
-
-    return category_positions
+        max_length = max((len(str(cell.value)) for cell in col if cell.value), default=0)
+        ws.column_dimensions[col[0].column_letter].width = max_length + 2
 
 def product_sums(ws):
     def get_merged_value(ws, cell_ref):
@@ -334,7 +327,7 @@ def prepare_chart_data(wb):
         for cell in row:
             cell.value = None
 
-    weekly_sheets = wb.sheetnames[3:]
+    weekly_sheets = wb.sheetnames[2:]
     all_categories = {}
     model_data = {}
     category_totals = {}
@@ -358,6 +351,8 @@ def prepare_chart_data(wb):
                     last_category = "Chassis"
                 elif "power" in last_category.lower():
                     last_category = "Power Supplies"
+                elif "external" in last_category.lower():
+                    last_category = "External"
             elif not last_category:
                 continue  # No category yet
 
@@ -374,7 +369,7 @@ def prepare_chart_data(wb):
 
             # Sum columns C–AE
             total_value = 0
-            for col in range(3, 32):  # C=3, AE=30
+            for col in range(4, 42):  # C=4, AP=42
                 cell_val = ws.cell(row=row, column=col).value
                 if isinstance(cell_val, (int, float)):
                     total_value += cell_val
@@ -445,8 +440,7 @@ def prepare_chart_data(wb):
         charts_ws.cell(row=start_row, column=j + 2).value = week
 
     # Each store becomes a row
-    stores = list(store_map.values())
-    for i, store in enumerate(stores):
+    for i, store in enumerate(store_map):
         charts_ws.cell(row=start_row + i + 1, column=1).value = store
         for j, sheetname in enumerate(weekly_sheets):
             ws = wb[sheetname]
@@ -457,7 +451,7 @@ def prepare_chart_data(wb):
                     store_total += val
             charts_ws.cell(row=start_row + i + 1, column=j + 2).value = store_total
 
-    end_row = start_row + len(stores)
+    end_row = start_row + len(store_map)
     end_col = 1 + len(week_labels)
     end_col_letter = get_column_letter(end_col)
     ref = f"A{start_row}:{end_col_letter}{end_row}"
@@ -468,32 +462,27 @@ def prepare_chart_data(wb):
 def add_or_update_table(ws, base_name, ref):
     """Add a table if it doesn't exist, or update ref if it does, ensuring uniqueness."""
 
+    min_col, min_row, max_col, max_row = range_boundaries(ref)
+    if max_row - min_row < 1:   # only header, no data
+        return  # skip invalid table
+
     # Sanitize name
     safe_name = "".join(c if c.isalnum() else "_" for c in base_name)
     safe_name = safe_name[:200].lstrip("0123456789")  # Excel rules: no leading digit, < 255 chars
 
-    # Collect existing names
+    # Collect existing tables
     if isinstance(ws._tables, dict):
         existing_tables = ws._tables
-        existing_names = set(existing_tables.keys())
     else:
         existing_tables = {t.name: t for t in ws._tables}
-        existing_names = set(existing_tables.keys())
 
     # Case 1: Update existing table with same name
-    if safe_name in existing_names:
+    if safe_name in existing_tables:
         existing_tables[safe_name].ref = ref
         return
 
-    # Case 2: Generate unique name if needed
-    unique_name = safe_name
-    counter = 1
-    while unique_name in existing_names:
-        unique_name = f"{safe_name}_{counter}"
-        counter += 1
-
     # Case 3: Create new table with unique name
-    tab = Table(displayName=unique_name, ref=ref)
+    tab = Table(displayName=safe_name, ref=ref)
     style = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True, showColumnStripes=False)
     tab.tableStyleInfo = style
     ws.add_table(tab)
@@ -744,7 +733,7 @@ def modify_products_window(use_original=False):
                     target_map = {
                         "Chassis": local_chassis,
                         "Coolers": local_coolers,
-                        "Miscellaneous": local_external,
+                        "External": local_external,
                         "Power Supplies": local_power
                     }[category]
                     del target_map[name]
